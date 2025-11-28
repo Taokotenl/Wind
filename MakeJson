@@ -1,0 +1,676 @@
+--[[
+    Rayfield to WindUI Adapter v2
+    Nâng cấp: Config Editor với JSON clipboard support
+]]
+
+local RayfieldAdapter = {}
+RayfieldAdapter.Flags = {}
+RayfieldAdapter._configStructure = {}
+
+-- Load WindUI
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+-- Tạo Custom Theme VTriP
+WindUI:AddTheme({
+    Name = "VTriP Dark",
+    Accent = WindUI:Gradient({
+        ["0"] = { Color = Color3.fromHex("#040040"), Transparency = 0 },
+        ["100"] = { Color = Color3.fromHex("#473BE8"), Transparency = 0.42 },
+    }, { Rotation = 104 }),
+    Background = WindUI:Gradient({
+        ["0"] = { Color = Color3.fromHex("#040040"), Transparency = 0 },
+        ["100"] = { Color = Color3.fromHex("#473BE8"), Transparency = 0.42 },
+    }, { Rotation = 104 }),
+})
+
+-- Hàm chuyển đổi Icon
+local function ConvertIcon(icon)
+    if type(icon) == "number" or (type(icon) == "string" and icon:match("^%d+$")) then
+        return "circle"
+    end
+    return icon or "circle"
+end
+
+-- PHẦN MỚI: Config Manager
+local ConfigManager = {}
+
+-- Hàm tạo structure mặc định
+function ConfigManager:CreateDefaultStructure(windowName)
+    return {
+        [windowName] = {
+            tabs = {}
+        }
+    }
+end
+
+-- Hàm lưu config lên clipboard
+function ConfigManager:SaveToClipboard(configStructure)
+    local json = game:GetService("HttpService"):JSONEncode(configStructure)
+    setclipboard(json)
+    print("✓ Config đã lưu vào clipboard!")
+    return json
+end
+
+-- Hàm tải config từ clipboard
+function ConfigManager:LoadFromClipboard()
+    local json = getclipboard()
+    if not json or json == "" then
+        print("✗ Clipboard trống!")
+        return nil
+    end
+    
+    local success, result = pcall(function()
+        return game:GetService("HttpService"):JSONDecode(json)
+    end)
+    
+    if success then
+        print("✓ Config đã tải từ clipboard!")
+        return result
+    else
+        print("✗ JSON không hợp lệ:", result)
+        return nil
+    end
+end
+
+-- Hàm thêm tab vào structure
+function ConfigManager:AddTab(configStructure, windowName, tabName, icon)
+    if not configStructure[windowName] then
+        configStructure[windowName] = { tabs = {} }
+    end
+    
+    configStructure[windowName].tabs[tabName] = {
+        name = tabName,
+        icon = icon or "folder",
+        elements = {}
+    }
+    return configStructure
+end
+
+-- Hàm thêm element vào tab
+function ConfigManager:AddElement(configStructure, windowName, tabName, elementName, elementType, enabled, order)
+    if not configStructure[windowName] or not configStructure[windowName].tabs[tabName] then
+        print("✗ Tab không tồn tại!")
+        return configStructure
+    end
+    
+    configStructure[windowName].tabs[tabName].elements[elementName] = {
+        type = elementType,
+        name = elementName,
+        enabled = enabled ~= false,
+        order = order or 1
+    }
+    return configStructure
+end
+
+-- Hàm xoá element
+function ConfigManager:RemoveElement(configStructure, windowName, tabName, elementName)
+    if configStructure[windowName] and configStructure[windowName].tabs[tabName] then
+        configStructure[windowName].tabs[tabName].elements[elementName] = nil
+    end
+    return configStructure
+end
+
+-- Hàm sắp xếp elements theo order
+function ConfigManager:SortElementsByOrder(elements)
+    local sorted = {}
+    for name, data in pairs(elements) do
+        table.insert(sorted, {name = name, data = data})
+    end
+    table.sort(sorted, function(a, b)
+        return (a.data.order or 0) < (b.data.order or 0)
+    end)
+    return sorted
+end
+
+-- Hàm lấy elements được bật
+function ConfigManager:GetEnabledElements(elements)
+    local enabled = {}
+    for name, data in pairs(elements) do
+        if data.enabled ~= false then
+            table.insert(enabled, {name = name, data = data})
+        end
+    end
+    table.sort(enabled, function(a, b)
+        return (a.data.order or 0) < (b.data.order or 0)
+    end)
+    return enabled
+end
+
+-- PHẦN MỚI: Adapter Manager
+local AdapterManager = {}
+AdapterManager.adapters = {}
+
+-- Hàm tạo Adapter từ config structure
+function AdapterManager:CreateFromConfig(configStructure, window)
+    local adapters = {}
+    
+    for windowName, windowData in pairs(configStructure) do
+        local windowAdapter = window
+        adapters[windowName] = {
+            window = windowAdapter,
+            tabs = {}
+        }
+        
+        for tabName, tabData in pairs(windowData.tabs or {}) do
+            local tab = windowAdapter:CreateTab(tabName, tabData.icon)
+            adapters[windowName].tabs[tabName] = {
+                tab = tab,
+                elements = {}
+            }
+            
+            -- Tạo elements theo thứ tự (enabled = true)
+            local enabledElements = ConfigManager:GetEnabledElements(tabData.elements or {})
+            
+            for _, elemData in ipairs(enabledElements) do
+                local name = elemData.name
+                local data = elemData.data
+                
+                -- Placeholder cho element (tùy thuộc vào script sử dụng)
+                adapters[windowName].tabs[tabName].elements[name] = {
+                    type = data.type,
+                    name = name,
+                    config = data
+                }
+            end
+        end
+    end
+    
+    return adapters
+end
+
+-- Hàm cập nhật element order
+function AdapterManager:UpdateElementOrder(configStructure, windowName, tabName, elementName, newOrder)
+    if configStructure[windowName] and configStructure[windowName].tabs[tabName] then
+        if configStructure[windowName].tabs[tabName].elements[elementName] then
+            configStructure[windowName].tabs[tabName].elements[elementName].order = newOrder
+        end
+    end
+    return configStructure
+end
+
+-- Hàm toggle element enabled status
+function AdapterManager:ToggleElement(configStructure, windowName, tabName, elementName)
+    if configStructure[windowName] and configStructure[windowName].tabs[tabName] then
+        if configStructure[windowName].tabs[tabName].elements[elementName] then
+            local element = configStructure[windowName].tabs[tabName].elements[elementName]
+            element.enabled = not element.enabled
+        end
+    end
+    return configStructure
+end
+
+-- Hàm đổi tên element
+function AdapterManager:RenameElement(configStructure, windowName, tabName, oldName, newName)
+    if configStructure[windowName] and configStructure[windowName].tabs[tabName] then
+        local elements = configStructure[windowName].tabs[tabName].elements
+        if elements[oldName] then
+            elements[oldName].name = newName
+            elements[newName] = elements[oldName]
+            elements[oldName] = nil
+        end
+    end
+    return configStructure
+end
+
+-- PHẦN CHÍNH: RayfieldAdapter Functions
+
+-- CreateWindow với config manager
+function RayfieldAdapter:CreateWindow(config)
+    local WindowAdapter = {}
+    
+    local windowTitle = config.Name or "Window"
+    if windowTitle:find("Flash Hub") then
+        windowTitle = windowTitle:gsub("Flash Hub", "VTriP")
+    end
+    
+    local windConfig = {
+        Title = windowTitle,
+        Icon = ConvertIcon(config.Icon),
+        Author = "Host By VTriP Official",
+        Folder = (config.ConfigurationSaving and config.ConfigurationSaving.FolderName) or "RayfieldAdapter",
+        Size = UDim2.fromOffset(580, 460),
+        Transparent = true,
+        Theme = "VTriP Dark",
+        Resizable = true,
+        SideBarWidth = 200,
+    }
+    
+    if config.KeySystem then
+        windConfig.KeySystem = {
+            Key = config.KeySettings.Key or {},
+            Note = config.KeySettings.Note or "No key note",
+            SaveKey = config.KeySettings.SaveKey or false,
+        }
+    end
+    
+    local Window = WindUI:CreateWindow(windConfig)
+    
+    Window:EditOpenButton({
+        Title = "Open VTriP",
+        Icon = ConvertIcon(config.Icon),
+        CornerRadius = UDim.new(0, 16),
+        StrokeThickness = 2,
+        Color = ColorSequence.new(Color3.fromHex("FF0F7B"), Color3.fromHex("F89B29")),
+        OnlyMobile = false,
+        Enabled = true,
+        Draggable = true,
+    })
+    
+    WindowAdapter._windWindow = Window
+    WindowAdapter._config = config
+    WindowAdapter._tabs = {}
+    WindowAdapter._configFile = (config.ConfigurationSaving and config.ConfigurationSaving.FileName) or "Config"
+    WindowAdapter._configStructure = ConfigManager:CreateDefaultStructure(windowTitle)
+    
+    if config.ToggleUIKeybind then
+        local keyCode = config.ToggleUIKeybind
+        if type(keyCode) == "string" then
+            Window:SetToggleKey(Enum.KeyCode[keyCode])
+        else
+            Window:SetToggleKey(keyCode)
+        end
+    end
+    
+    -- CreateTab
+    function WindowAdapter:CreateTab(name, icon)
+        local TabAdapter = {}
+        
+        local Tab = Window:Tab({
+            Title = name,
+            Icon = ConvertIcon(icon),
+        })
+        
+        TabAdapter._windTab = Tab
+        TabAdapter._elements = {}
+        TabAdapter._tabName = name
+        
+        -- Thêm tab vào structure
+        ConfigManager:AddTab(self._configStructure, windowTitle, name, icon or "folder")
+        
+        function TabAdapter:CreateSection(name)
+            local SectionAdapter = {}
+            local Section = Tab:Section({
+                Title = name,
+                Box = false,
+                TextSize = 18,
+                Opened = true,
+            })
+            
+            SectionAdapter._windSection = Section
+            
+            function SectionAdapter:Set(newName)
+                Section:SetTitle(newName)
+            end
+            
+            return SectionAdapter
+        end
+        
+        function TabAdapter:CreateButton(config)
+            local ButtonAdapter = {}
+            local Button = Tab:Button({
+                Title = config.Name,
+                Desc = config.Desc or "",
+                Callback = config.Callback or function() end
+            })
+            
+            ButtonAdapter._windButton = Button
+            
+            function ButtonAdapter:Set(newName)
+                Button:SetTitle(newName)
+            end
+            
+            -- Thêm vào structure
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Name, "Button", true, #TabAdapter._elements + 1)
+            
+            return ButtonAdapter
+        end
+        
+        function TabAdapter:CreateToggle(config)
+            local ToggleAdapter = {}
+            ToggleAdapter.CurrentValue = config.CurrentValue or false
+            
+            local description = config.Desc or ""
+            if config.Plus then
+                description = "[Plus Feature] " .. description
+            end
+            
+            local Toggle = Tab:Toggle({
+                Title = config.Name,
+                Desc = description,
+                Type = "Checkbox",
+                Value = config.CurrentValue or false,
+                Callback = function(state)
+                    ToggleAdapter.CurrentValue = state
+                    if config.Callback then
+                        config.Callback(state)
+                    end
+                end
+            })
+            
+            ToggleAdapter._windToggle = Toggle
+            
+            if config.Flag then
+                RayfieldAdapter.Flags[config.Flag] = ToggleAdapter
+            end
+            
+            function ToggleAdapter:Set(value)
+                self.CurrentValue = value
+                Toggle:Set(value)
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Name, "Toggle", true, #TabAdapter._elements + 1)
+            
+            return ToggleAdapter
+        end
+        
+        function TabAdapter:CreateSlider(config)
+            local SliderAdapter = {}
+            SliderAdapter.CurrentValue = config.CurrentValue or config.Range[1]
+            
+            local Slider = Tab:Slider({
+                Title = config.Name,
+                Desc = config.Suffix or "",
+                Step = config.Increment or 1,
+                Value = {
+                    Min = config.Range[1],
+                    Max = config.Range[2],
+                    Default = config.CurrentValue or config.Range[1],
+                },
+                Callback = function(value)
+                    SliderAdapter.CurrentValue = value
+                    if config.Callback then
+                        config.Callback(value)
+                    end
+                end
+            })
+            
+            SliderAdapter._windSlider = Slider
+            
+            if config.Flag then
+                RayfieldAdapter.Flags[config.Flag] = SliderAdapter
+            end
+            
+            function SliderAdapter:Set(value)
+                self.CurrentValue = value
+                Slider:Set(value)
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Name, "Slider", true, #TabAdapter._elements + 1)
+            
+            return SliderAdapter
+        end
+        
+        function TabAdapter:CreateInput(config)
+            local InputAdapter = {}
+            InputAdapter.CurrentValue = config.CurrentValue or ""
+            
+            local Input = Tab:Input({
+                Title = config.Name,
+                Desc = "",
+                Value = config.CurrentValue or "",
+                Type = "Input",
+                Placeholder = config.PlaceholderText or "",
+                Callback = function(text)
+                    InputAdapter.CurrentValue = text
+                    if config.Callback then
+                        config.Callback(text)
+                    end
+                end
+            })
+            
+            InputAdapter._windInput = Input
+            
+            if config.Flag then
+                RayfieldAdapter.Flags[config.Flag] = InputAdapter
+            end
+            
+            function InputAdapter:Set(value)
+                self.CurrentValue = value
+                Input:Set(value)
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Name, "Input", true, #TabAdapter._elements + 1)
+            
+            return InputAdapter
+        end
+        
+        function TabAdapter:CreateDropdown(config)
+            local DropdownAdapter = {}
+            
+            local isMulti = config.MultipleOptions or false
+            local defaultValue
+            
+            if isMulti then
+                if type(config.CurrentOption) == "table" then
+                    defaultValue = config.CurrentOption
+                elseif type(config.CurrentOption) == "string" then
+                    defaultValue = {config.CurrentOption}
+                else
+                    defaultValue = {}
+                end
+            else
+                if type(config.CurrentOption) == "table" and #config.CurrentOption > 0 then
+                    defaultValue = config.CurrentOption[1]
+                elseif type(config.CurrentOption) == "string" then
+                    defaultValue = config.CurrentOption
+                else
+                    defaultValue = config.Options and config.Options[1] or ""
+                end
+            end
+            
+            DropdownAdapter.CurrentOption = defaultValue
+            
+            local Dropdown = Tab:Dropdown({
+                Title = config.Name,
+                Desc = config.Desc or "",
+                Values = config.Options or {},
+                Value = defaultValue,
+                Multi = isMulti,
+                AllowNone = true,
+                Callback = function(options)
+                    DropdownAdapter.CurrentOption = options
+                    if config.Callback then
+                        if isMulti then
+                            config.Callback(type(options) == "table" and options or {options})
+                        else
+                            config.Callback(type(options) == "string" and {options} or options)
+                        end
+                    end
+                end
+            })
+            
+            DropdownAdapter._windDropdown = Dropdown
+            
+            if config.Flag then
+                RayfieldAdapter.Flags[config.Flag] = DropdownAdapter
+            end
+            
+            function DropdownAdapter:Set(options)
+                if isMulti then
+                    local value = type(options) == "table" and options or {options}
+                    self.CurrentOption = value
+                    Dropdown:Select(value)
+                else
+                    local value = type(options) == "table" and options[1] or options
+                    self.CurrentOption = value
+                    Dropdown:Select(value)
+                end
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Name, "Dropdown", true, #TabAdapter._elements + 1)
+            
+            return DropdownAdapter
+        end
+        
+        function TabAdapter:CreateColorPicker(config)
+            local ColorPickerAdapter = {}
+            ColorPickerAdapter.CurrentValue = config.Color or Color3.fromRGB(255, 255, 255)
+            
+            local ColorPicker = Tab:Colorpicker({
+                Title = config.Name,
+                Desc = "",
+                Default = config.Color or Color3.fromRGB(255, 255, 255),
+                Transparency = 0,
+                Callback = function(color)
+                    ColorPickerAdapter.CurrentValue = color
+                    if config.Callback then
+                        config.Callback(color)
+                    end
+                end
+            })
+            
+            ColorPickerAdapter._windColorPicker = ColorPicker
+            
+            if config.Flag then
+                RayfieldAdapter.Flags[config.Flag] = ColorPickerAdapter
+            end
+            
+            function ColorPickerAdapter:Set(color)
+                self.CurrentValue = color
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Name, "ColorPicker", true, #TabAdapter._elements + 1)
+            
+            return ColorPickerAdapter
+        end
+        
+        function TabAdapter:CreateKeybind(config)
+            local KeybindAdapter = {}
+            KeybindAdapter.CurrentKeybind = config.CurrentKeybind or "None"
+            
+            local Keybind = Tab:Keybind({
+                Title = config.Name,
+                Desc = "",
+                Value = config.CurrentKeybind or "None",
+                Callback = function(key)
+                    KeybindAdapter.CurrentKeybind = key
+                    if config.Callback then
+                        if config.HoldToInteract then
+                            config.Callback(true)
+                        else
+                            config.Callback(key)
+                        end
+                    end
+                end
+            })
+            
+            KeybindAdapter._windKeybind = Keybind
+            
+            if config.Flag then
+                RayfieldAdapter.Flags[config.Flag] = KeybindAdapter
+            end
+            
+            function KeybindAdapter:Set(key)
+                self.CurrentKeybind = key
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Name, "Keybind", true, #TabAdapter._elements + 1)
+            
+            return KeybindAdapter
+        end
+        
+        function TabAdapter:CreateLabel(title, icon, color, ignoreTheme)
+            local LabelAdapter = {}
+            
+            local Label = Tab:Paragraph({
+                Title = title,
+                Desc = "",
+                Image = "",
+                Locked = false,
+            })
+            
+            LabelAdapter._windLabel = Label
+            
+            function LabelAdapter:Set(newTitle, newIcon, newColor, newIgnoreTheme)
+                Label:SetTitle(newTitle)
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, title, "Label", true, #TabAdapter._elements + 1)
+            
+            return LabelAdapter
+        end
+        
+        function TabAdapter:CreateParagraph(config)
+            local ParagraphAdapter = {}
+            
+            local Paragraph = Tab:Paragraph({
+                Title = config.Title or "Paragraph",
+                Desc = config.Content or "",
+                Locked = false,
+            })
+            
+            ParagraphAdapter._windParagraph = Paragraph
+            
+            function ParagraphAdapter:Set(newConfig)
+                Paragraph:SetTitle(newConfig.Title or config.Title)
+                Paragraph:SetDesc(newConfig.Content or config.Content)
+            end
+            
+            ConfigManager:AddElement(self._configStructure, windowTitle, self._tabName, config.Title or "Paragraph", "Paragraph", true, #TabAdapter._elements + 1)
+            
+            return ParagraphAdapter
+        end
+        
+        return TabAdapter
+    end
+    
+    -- Hàm xuất config
+    function WindowAdapter:ExportConfig()
+        return ConfigManager:SaveToClipboard(self._configStructure)
+    end
+    
+    -- Hàm nhập config
+    function WindowAdapter:ImportConfig()
+        local newConfig = ConfigManager:LoadFromClipboard()
+        if newConfig then
+            self._configStructure = newConfig
+            return true
+        end
+        return false
+    end
+    
+    -- Hàm cập nhật element order
+    function WindowAdapter:UpdateElementOrder(tabName, elementName, newOrder)
+        return ConfigManager:UpdateElementOrder(self._configStructure, windowTitle, tabName, elementName, newOrder)
+    end
+    
+    -- Hàm toggle element
+    function WindowAdapter:ToggleElement(tabName, elementName)
+        return ConfigManager:ToggleElement(self._configStructure, windowTitle, tabName, elementName)
+    end
+    
+    -- Hàm đổi tên element
+    function WindowAdapter:RenameElement(tabName, oldName, newName)
+        return ConfigManager:RenameElement(self._configStructure, windowTitle, tabName, oldName, newName)
+        self:ExportConfig()
+    end
+    
+    -- Hàm lấy config structure hiện tại
+    function WindowAdapter:GetConfig()
+        return self._configStructure
+    end
+    
+    function WindowAdapter:Destroy()
+        if self._windWindow then
+            -- Destroy logic
+        end
+    end
+    
+    return WindowAdapter
+end
+
+-- Notify
+function RayfieldAdapter:Notify(config)
+    WindUI:Notify({
+        Title = config.Title or "Notification",
+        Content = config.Content or "",
+        Duration = config.Duration or 5,
+        Icon = ConvertIcon(config.Image),
+    })
+end
+
+-- Export public functions
+RayfieldAdapter.ConfigManager = ConfigManager
+RayfieldAdapter.AdapterManager = AdapterManager
+
+return RayfieldAdapter
